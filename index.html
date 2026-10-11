@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Neon Drift</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #05050a;
+      color: #e0e0ff;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+      touch-action: none;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    #ui {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .score {
+      position: absolute;
+      top: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 1.6rem;
+      font-weight: 300;
+      letter-spacing: 0.15em;
+      opacity: 0.9;
+    }
+    .high {
+      position: absolute;
+      top: 3.6rem;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.85rem;
+      opacity: 0.45;
+      letter-spacing: 0.1em;
+    }
+    .center {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      pointer-events: auto;
+    }
+    .title {
+      font-size: clamp(2rem, 8vw, 3.5rem);
+      font-weight: 200;
+      letter-spacing: 0.4em;
+      margin-bottom: 0.8rem;
+      text-transform: uppercase;
+    }
+    .subtitle {
+      font-size: 1rem;
+      opacity: 0.5;
+      margin-bottom: 2.5rem;
+      letter-spacing: 0.15em;
+    }
+    .btn {
+      display: inline-block;
+      padding: 0.9rem 2.4rem;
+      border: 1px solid rgba(140, 120, 255, 0.5);
+      border-radius: 999px;
+      background: rgba(100, 80, 220, 0.15);
+      color: #e0e0ff;
+      font-size: 1rem;
+      letter-spacing: 0.2em;
+      cursor: pointer;
+      transition: all 0.3s;
+      pointer-events: auto;
+    }
+    .btn:hover {
+      background: rgba(120, 100, 255, 0.3);
+      box-shadow: 0 0 30px rgba(140, 120, 255, 0.3);
+    }
+    .hint {
+      position: absolute;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.8rem;
+      opacity: 0.4;
+      letter-spacing: 0.12em;
+      text-align: center;
+    }
+    .game-over .title { color: #ff6b9d; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="ui">
+    <div class="score" id="score">0</div>
+    <div class="high" id="high">BEST 0</div>
+    <div class="center" id="menu">
+      <div class="title">Neon Drift</div>
+      <div class="subtitle">survive the void</div>
+      <div class="btn" id="start">PLAY</div>
+    </div>
+    <div class="hint" id="hint">← → or A D · swipe on mobile</div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let w, h, dpr;
+
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = canvas.width = window.innerWidth * dpr;
+      h = canvas.height = window.innerHeight * dpr;
+      canvas.style.width = window.innerWidth + 'px';
+      canvas.style.height = window.innerHeight + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Game state
+    let state = 'menu'; // menu | play | dead
+    let score = 0;
+    let high = parseInt(localStorage.getItem('neonDriftHigh') || '0');
+    document.getElementById('high').textContent = 'BEST ' + high;
+
+    // Player
+    const player = {
+      x: 0,
+      y: 0,
+      vx: 0,
+      size: 14,
+      trail: []
+    };
+
+    // World
+    let speed = 4;
+    let obstacles = [];
+    let orbs = [];
+    let particles = [];
+    let stars = [];
+    let time = 0;
+    let invincible = 0;
+
+    // Input
+    let keys = { left: false, right: false };
+    let touchX = null;
+
+    window.addEventListener('keydown', e => {
+      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
+      if (e.key === ' ' || e.key === 'Enter') {
+        if (state !== 'play') startGame();
+      }
+    });
+    window.addEventListener('keyup', e => {
+      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = false;
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
+    });
+
+    // Touch
+    canvas.addEventListener('touchstart', e => {
+      e.preventDefault();
+      touchX = e.touches[0].clientX;
+      if (state !== 'play') startGame();
+    }, { passive: false });
+    canvas.addEventListener('touchmove', e => {
+      e.preventDefault();
+      if (touchX !== null) {
+        const dx = e.touches[0].clientX - touchX;
+        player.vx += dx * 0.15;
+        touchX = e.touches[0].clientX;
+      }
+    }, { passive: false });
+    canvas.addEventListener('touchend', () => { touchX = null; });
+
+    document.getElementById('start').addEventListener('click', startGame);
+
+    function startGame() {
+      state = 'play';
+      score = 0;
+      speed = 4.5;
+      player.x = window.innerWidth / 2;
+      player.y = window.innerHeight * 0.78;
+      player.vx = 0;
+      player.trail = [];
+      obstacles = [];
+      orbs = [];
+      particles = [];
+      invincible = 60;
+      time = 0;
+      document.getElementById('menu').style.display = 'none';
+      document.getElementById('hint').style.opacity = '0';
+      document.getElementById('score').textContent = '0';
+    }
+
+    function die() {
+      if (invincible > 0) return;
+      state = 'dead';
+      if (score > high) {
+        high = score;
+        localStorage.setItem('neonDriftHigh', high);
+        document.getElementById('high').textContent = 'BEST ' + high;
+      }
+      // explosion
+      for (let i = 0; i < 50; i++) {
+        particles.push({
+          x: player.x, y: player.y,
+          vx: (Math.random() - 0.5) * 12,
+          vy: (Math.random() - 0.5) * 12,
+          life: 1,
+          size: Math.random() * 4 + 1,
+          hue: 300 + Math.random() * 60
+        });
+      }
+      setTimeout(() => {
+        document.getElementById('menu').style.display = 'block';
+        document.getElementById('menu').classList.add('game-over');
+        document.querySelector('.title').textContent = 'DRIFT ENDED';
+        document.querySelector('.subtitle').textContent = 'score ' + score;
+        document.getElementById('start').textContent = 'AGAIN';
+        document.getElementById('hint').style.opacity = '0.4';
+      }, 900);
+    }
+
+    // Spawn helpers
+    function spawnObstacle() {
+      const lane = Math.random();
+      const x = lane * window.innerWidth;
+      const size = 18 + Math.random() * 28;
+      obstacles.push({
+        x, y: -60,
+        size,
+        rot: Math.random() * Math.PI * 2,
+        rotSpeed: (Math.random() - 0.5) * 0.08
+      });
+    }
+
+    function spawnOrb() {
+      orbs.push({
+        x: Math.random() * window.innerWidth,
+        y: -30,
+        r: 7 + Math.random() * 4,
+        pulse: Math.random() * Math.PI * 2
+      });
+    }
+
+    // Stars background
+    for (let i = 0; i < 80; i++) {
+      stars.push({
+        x: Math.random() * window.innerWidth,
+        y: Math.random() * window.innerHeight,
+        s: Math.random() * 1.5 + 0.3,
+        speed: 0.3 + Math.random() * 1.2
+      });
+    }
+
+    function update() {
+      if (state !== 'play') return;
+
+      time++;
+      if (invincible > 0) invincible--;
+
+      // Speed ramp
+      speed += 0.0018;
+
+      // Player movement
+      if (keys.left) player.vx -= 0.9;
+      if (keys.right) player.vx += 0.9;
+      player.vx *= 0.88;
+      player.x += player.vx;
+
+      // Bounds
+      const margin = 20;
+      if (player.x < margin) { player.x = margin; player.vx = 0; }
+      if (player.x > window.innerWidth - margin) { player.x = window.innerWidth - margin; player.vx = 0; }
+
+      // Trail
+      player.trail.unshift({ x: player.x, y: player.y });
+      if (player.trail.length > 18) player.trail.pop();
+
+      // Spawn
+      if (time % Math.max(18, 45 - Math.floor(speed)) === 0) spawnObstacle();
+      if (time % 55 === 0) spawnOrb();
+
+      // Move world
+      obstacles.forEach(o => {
+        o.y += speed;
+        o.rot += o.rotSpeed;
+      });
+      orbs.forEach(o => {
+        o.y += speed * 0.95;
+        o.pulse += 0.1;
+      });
+      stars.forEach(s => {
+        s.y += s.speed * (speed * 0.25);
+        if (s.y > window.innerHeight) {
+          s.y = -5;
+          s.x = Math.random() * window.innerWidth;
+        }
+      });
+
+      // Collisions
+      obstacles = obstacles.filter(o => {
+        if (o.y > window.innerHeight + 80) return false;
+        const dx = o.x - player.x;
+        const dy = o.y - player.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < o.size * 0.55 + player.size * 0.7) {
+          die();
+          return false;
+        }
+        return true;
+      });
+
+      orbs = orbs.filter(o => {
+        if (o.y > window.innerHeight + 40) return false;
+        const dx = o.x - player.x;
+        const dy = o.y - player.y;
+        if (Math.sqrt(dx * dx + dy * dy) < o.r + player.size) {
+          score += 25;
+          document.getElementById('score').textContent = score;
+          // sparkle
+          for (let i = 0; i < 12; i++) {
+            particles.push({
+              x: o.x, y: o.y,
+              vx: (Math.random() - 0.5) * 6,
+              vy: (Math.random() - 0.5) * 6,
+              life: 1,
+              size: Math.random() * 3 + 1,
+              hue: 180 + Math.random() * 40
+            });
+          }
+          return false;
+        }
+        return true;
+      });
+
+      // Score over time
+      if (time % 6 === 0) {
+        score += 1;
+        document.getElementById('score').textContent = score;
+      }
+
+      // Particles
+      particles = particles.filter(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vx *= 0.96;
+        p.vy *= 0.96;
+        p.life -= 0.025;
+        return p.life > 0;
+      });
+    }
+
+    function draw() {
+      // Clear with slight trail
+      ctx.fillStyle = 'rgba(5, 5, 10, 0.35)';
+      ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+
+      // Stars
+      stars.forEach(s => {
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.s, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(180, 180, 255, ${0.3 + s.s * 0.3})`;
+        ctx.fill();
+      });
+
+      // Orbs
+      orbs.forEach(o => {
+        const glow = 0.6 + Math.sin(o.pulse) * 0.3;
+        ctx.beginPath();
+        ctx.arc(o.x, o.y, o.r * 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(100, 220, 255, ${0.08 * glow})`;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(190, 90%, 70%, ${glow})`;
+        ctx.fill();
+      });
+
+      // Obstacles
+      obstacles.forEach(o => {
+        ctx.save();
+        ctx.translate(o.x, o.y);
+        ctx.rotate(o.rot);
+        ctx.beginPath();
+        // diamond / crystal shape
+        ctx.moveTo(0, -o.size);
+        ctx.lineTo(o.size * 0.7, 0);
+        ctx.lineTo(0, o.size);
+        ctx.lineTo(-o.size * 0.7, 0);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255, 80, 140, 0.85)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 160, 200, 0.6)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+      });
+
+      // Player trail
+      if (state === 'play' || state === 'dead') {
+        player.trail.forEach((t, i) => {
+          const alpha = (1 - i / player.trail.length) * 0.5;
+          ctx.beginPath();
+          ctx.arc(t.x, t.y, player.size * 0.4 * (1 - i / 20), 0, Math.PI * 2);
+          ctx.fillStyle = `hsla(250, 80%, 70%, ${alpha})`;
+          ctx.fill();
+        });
+
+        // Player ship
+        if (invincible <= 0 || Math.floor(invincible / 4) % 2 === 0) {
+          ctx.save();
+          ctx.translate(player.x, player.y);
+          // triangle
+          ctx.beginPath();
+          ctx.moveTo(0, -player.size);
+          ctx.lineTo(player.size * 0.75, player.size * 0.7);
+          ctx.lineTo(-player.size * 0.75, player.size * 0.7);
+          ctx.closePath();
+          ctx.fillStyle = '#c0b0ff';
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // engine glow
+          ctx.beginPath();
+          ctx.arc(0, player.size * 0.5, 6, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(160, 140, 255, 0.5)';
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+
+      // Particles
+      particles.forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${p.hue}, 80%, 70%, ${p.life})`;
+        ctx.fill();
+      });
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+    loop();
+  </script>
+</body>
+</html>
